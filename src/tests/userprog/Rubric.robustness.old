@@ -1,0 +1,11 @@
+Robustness of system calls:
+- Test robustness of file descriptor handling.
+2	read-bad-fd
+2	read-stdout
+2	write-bad-fd
+2	write-stdin
+
+- Test robustness of system call implementation.
+3	sc-bad-arg
+5	sc-boundary
+5	sc-boundary-2

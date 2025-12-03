@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h" // for child_lock
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -92,12 +93,23 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    int64_t time_to_wake;               /* ticks + timer_ticks() */
+
+    /* File descriptor table structure (PROJECT 3). */
+    struct file *fd_table[128];   
+
+    /* Exit status for a waiting parent of a child process (PROJECT 3). */
+    int exit_status;
+
+    struct list children;
+    struct thread *parent;
+    struct file *executable; // the program's executable file
+    struct lock child_lock; // for synchronization of child processes
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
-
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

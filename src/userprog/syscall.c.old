@@ -7,11 +7,12 @@
 #include "threads/malloc.h"
 #include "devices/input.h"
 #include "lib/string.h"
+
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 
-#include "process.h"
 #include "filesys/file.h"
+
 #include "filesys/filesys.h"
 #include "devices/shutdown.h"
 
@@ -20,13 +21,7 @@ static void syscall_handler (struct intr_frame *);
 void test_address(unsigned int *address);
 void test_address_range (unsigned int *address, size_t size);
 
-/* File system synchronization mechanism for P3. */
-struct lock file_lock;
-
 void exit (int status) {
-  struct thread *t = thread_current();
-  t->exit_status = status;
-
   char *thread = calloc (sizeof (char), strlen (thread_name ()));
   char *save_ptr;
   strlcpy (thread, thread_name (), strlen (thread_name ()) + 1);
@@ -36,6 +31,9 @@ void exit (int status) {
   thread_exit();
 }
 
+/* File system synchronization mechanism for P3. */
+struct lock file_lock;
+
 void
 syscall_init (void) 
 {
@@ -44,7 +42,7 @@ syscall_init (void)
 }
 
 static void
-syscall_handler (struct intr_frame *f) 
+syscall_handler (struct intr_frame *f)
 {
   // hex_dump (f->esp, f->esp, 300, true);
   test_address (f->esp);
@@ -55,7 +53,6 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_HALT: {
       shutdown_power_off();
-      break;
     }
 
     case SYS_EXIT: {
@@ -68,108 +65,46 @@ syscall_handler (struct intr_frame *f)
       //   // f->eax = -1;
       //   exit (-1);
       // }
-      test_address ((void *) esp + 1);
+      test_address (esp + 1);
       int status = *(int *)(esp + 1);
       exit (status);
-      break;
-      // test_address (esp + 1);
-      // int status = *(int *)(esp + 1);
-
-      // struct thread *t = thread_current();
-      // // t->exit_status = status;
-
-      // char *thread = calloc (sizeof (char), strlen (thread_name ()));
-      // char *save_ptr;
-      // strlcpy (thread, thread_name (), strlen (thread_name ()) + 1);
-      // strtok_r (thread, " ", &save_ptr);
-      // printf("%s: exit(%d)\n", thread, status >= 0 ? status : -1);
-      // free (thread);
-
-      // thread_exit();
     }
 
     case SYS_EXEC: {
       test_address (f->esp + 1);
+      exit (0);
 
-      const char *cmd_line = (const char *) *(esp + 1);
-      f->eax = process_execute(cmd_line);
-      return;
     }
 
     case SYS_WAIT: {
-      // if (!test_address(f->esp + 1)) {
-      //   f->eax = -1;
-      //   return;
-      // }
-      test_address ((void *) esp + 1);
 
-      tid_t pid = (tid_t) *(esp + 1);
-      f->eax = process_wait(pid);
-      break;
+
     }
 
     case SYS_CREATE: {
-      test_address ((unsigned int *)(esp + 1));
-      const char *filename = (const char *) *(esp + 1);
-      if (!filename) {
-        f->eax = false;
-        exit(-1);
-        return;
+      test_address (f->esp + 1);
+      const char *filename = (const char *)*(esp + 1);
+
+      if (!filename || memcmp (filename, "", 1) == 0) {
+        exit (-1);
       }
 
-      test_address((unsigned int *) filename);
-      if (*filename == '\0') {
-        f->eax = false;
-        return;
-      }
-
-      test_address ((unsigned int *)(esp + 2));
-      unsigned size = *(unsigned *) (esp + 2);
-
-      lock_acquire(&file_lock);
-      bool created = filesys_create(filename, size);
-      lock_release(&file_lock);
-
-      f->eax = created;
-      return;
-
+      // still need to implement functionality
+      exit (0);
     }
 
     case SYS_REMOVE: {
-      test_address ((void *) esp + 1);
-      // if (!test_address(f->esp + 1)) {
-      //   f->eax = -1;
-      //   return;
-      // }
 
-      const char *filename = (const char *)*(esp + 1);
 
-      test_address ((unsigned int *)filename);
-      if (!filename) {
-        // f->eax = false;
-        // break;
-        // exit (-1);
-        f->eax = false;
-        return;
-      }
-
-      lock_acquire(&file_lock);
-      bool removed = filesys_remove(filename);
-      lock_release(&file_lock);
-
-      f->eax = removed;
-      break;
     }
 
     case SYS_OPEN: {
       // Validate the address
-      test_address ((void *)f->esp + 1);
+      test_address (f->esp + 1);
       const char *filename = (const char *)*(esp + 1);
 
-      if (!filename) {
-        // exit (-1);
-        f->eax = -1;
-        return;
+      if (!filename || memcmp (filename, "", 1) == 0) {
+        exit (-1);
       }
 
       // use lock to prevent two threads opening the same file at once
@@ -178,9 +113,7 @@ syscall_handler (struct intr_frame *f)
       lock_release(&file_lock);
 
       if (!opened_file) {
-        // exit (-1);
-        f->eax = -1;
-        return;
+        exit (0);
       }
 
       struct thread *t = thread_current();
@@ -191,8 +124,7 @@ syscall_handler (struct intr_frame *f)
         if (!(t->fd_table[fd])) {
           t->fd_table[fd] = opened_file;
           f->eax = fd;  // return FD on success
-          // exit (0);r
-          return;
+          exit (0);
         }
       }
 
@@ -201,10 +133,9 @@ syscall_handler (struct intr_frame *f)
         lock_acquire(&file_lock);
         file_close(opened_file);
         lock_release(&file_lock);
-        // exit (-1);
-        f->eax = -1;
+        exit (-1);
       }
-      return;
+      exit (0);
     }
 
     case SYS_FILESIZE: {
@@ -222,16 +153,13 @@ syscall_handler (struct intr_frame *f)
       struct file *file_obj = t->fd_table[fd];
 
       if (!file_obj) {
-        // exit (-1);
-        f->eax = -1;
-        return;
+        exit (-1);
       }
 
       lock_acquire(&file_lock);
-      f->eax = file_length(file_obj);
+      // f->eax = file_length(file_obj);
       lock_release(&file_lock);
-      // exit (file_length (file_obj));
-      return;
+      exit (file_length (file_obj));
     }
 
     case SYS_READ: {
@@ -243,29 +171,14 @@ syscall_handler (struct intr_frame *f)
         // [esp + 2] - arg1 (buffer)
         // [esp + 3] - arg2 (size)
 
-      test_address ((void *) esp + 1);
+      test_address (esp + 1);
       int fd = *(esp + 1);
       
-      test_address ((void *) esp + 2);
+      test_address (esp + 2);
       char *buffer = (char *) *(esp + 2);
       
-      test_address ((void *)esp + 3);
+      test_address (esp + 3);
       size_t size = *(esp + 3);
-
-      struct thread *t = thread_current();
-
-      if (!buffer || !is_user_vaddr(buffer) || !pagedir_get_page(t->pagedir, buffer)) {
-        exit(-1);
-      }
-
-      if (!is_user_vaddr(buffer + size - 1) || !pagedir_get_page(t->pagedir, buffer + size - 1)) {
-        exit(-1);
-      }
-
-      if (size == 0) {
-        f->eax = 0;
-        return;
-      }
 
       // if (!test_address_range (buffer, size)) {
       //   exit (-1);
@@ -281,37 +194,36 @@ syscall_handler (struct intr_frame *f)
           buf[i] = (char) input_getc();
         }
         // exit ((int)size);
-        f->eax = (int)size; 
+        f->eax = (int)size;
       }
+
+      struct thread *t = thread_current();
 
       // Read from a file
       int bytes_read = 0;
-      if (fd >= 2 && fd < 128 && t->fd_table[fd]) {
+      if (fd >= 2 && fd < 128 && t->fd_table[fd] != NULL) {
         lock_acquire(&file_lock);
         bytes_read = file_read(t->fd_table[fd], buffer, size);
         lock_release(&file_lock);
 
         // exit (bytes_read);
         f->eax = bytes_read;
-        // thread_exit();
       }
       return;
     }
 
     case SYS_WRITE: {
       /* int write(int fd, const void *buffer, unsigned size) */
-      test_address ((void *) esp + 1);
+      test_address (esp + 1);
       int fd = *(esp + 1);
       
-      test_address ((void *) esp + 2);
+      test_address (esp + 2);
       char *buffer = (char *) *(esp + 2);
-      if (!buffer) {
-        // exit (-1);
-        f->eax = -1;
-        return;
+      if (buffer == NULL) {
+        exit (-1);
       }
       
-      test_address ((void *)esp + 3);
+      test_address (esp + 3);
       size_t size = *(esp + 3);
       
       test_address_range ((unsigned int *)buffer, size);
@@ -319,7 +231,6 @@ syscall_handler (struct intr_frame *f)
       if (fd == 1) {
         putbuf (buffer, size);
         f->eax = size;
-        return;
       } else {
         struct thread *t = thread_current();
   
@@ -333,7 +244,6 @@ syscall_handler (struct intr_frame *f)
           }
         }
         f->eax = bytes_written;
-        // thread_exit();
       }
       return;
     }
@@ -352,8 +262,7 @@ syscall_handler (struct intr_frame *f)
       // Validate FD
       if (fd < 2 || fd >= 128) {
         f->eax = -1;
-        // exit (-1);
-        return;
+        exit (-1);
       }
 
       struct thread *t = thread_current();
@@ -361,16 +270,14 @@ syscall_handler (struct intr_frame *f)
 
       if (!file_obj) {
         f->eax = -1;
-        // exit (-1);
-        return;
+        exit (-1);
       }
 
       lock_acquire(&file_lock);
       file_seek(file_obj, offset);
       lock_release(&file_lock);
 
-      // exit (0);
-      return;
+      exit (0);
     }
 
     case SYS_TELL: {
@@ -382,8 +289,7 @@ syscall_handler (struct intr_frame *f)
       // Validate FD
       if (fd < 2 || fd >= 128) {
         f->eax = -1;
-        // exit (-1);
-        return;
+        exit (-1);
       }
 
       struct thread *t = thread_current();
@@ -391,52 +297,34 @@ syscall_handler (struct intr_frame *f)
 
       if (!file_obj) {
         f->eax = -1;
-        // exit (-1);
-        return;
+        exit (-1);
       }
 
       lock_acquire(&file_lock);
       f->eax = file_tell(file_obj);
       lock_release(&file_lock);
 
-      // exit (0);
-      return;
+      exit (0);
     }
 
     case SYS_CLOSE: {
-      // Validate the FD address
+      // robustness testing for close
       test_address (f->esp + 1);
-      int fd = *(int *)(esp + 1);
-
-      // Validate FD
-      if (fd < 2 || fd >= 128) {
+      int fd = *(esp + 1);
+      if (fd == 0 || fd == 1) {
         f->eax = -1;
-        break;
+        exit (-1);
       }
 
-      struct thread *t = thread_current();
-      struct file *file_obj = t->fd_table[fd];
+      // still need to check fd table to see if an fd is valid.
 
-      if (!file_obj) {
-        f->eax = -1;
-        // exit (-1);
-        return;
-      }
-
-      lock_acquire(&file_lock);
-      file_close(file_obj);
-      lock_release(&file_lock);
-
-      t->fd_table[fd] = NULL;
-
-      break;
+      exit (-1);
     }
 
     default:
       printf("Unsupported syscall %d\n", syscall_num);
       f->eax = -1;
-      // exit (-1);
-      return;
+      exit (-1);
   }
 }
 

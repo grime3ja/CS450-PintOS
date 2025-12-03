@@ -1,0 +1,73 @@
+                      +------------------------+
+                      |          CS 450        |
+                      | PROJECT 1: ALARM CLOCK |
+                      |     DESIGN DOCUMENT    |
+                      +------------------------+
+                                  
+---- GROUP ----
+ 
+--Jacob Grimes  <grime3ja@dukes.jmu.edu>
+--Mackenzie Seek <seekmn@dukes.jmu.edu>
+--Joey Walker <walke3jk@dukes.jmu.edu>
+--Ian Zygmunt <zygmunia@dukes.jmu.edu>
+ 
+---- PRELIMINARIES ----
+ 
+--We did not consult any other other outside documentation besides PintOS 
+--documentation and course text.
+ 
+                            ALARM CLOCK
+                            ===========
+ 
+---- DATA STRUCTURES ----
+ 
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+-- 1. struct list sleeping (added in timer.c)
+    -- a linked list to hold all of the sleeping threads in ascending order by time to wake.
+-- 2. int64_t time_to_wake (within struct thread in thread.h/thread.c) 
+    -- ticks + timer_ticks() calculates how long the thread has to sleep relative to how long the OS has been alive.
+
+---- ALGORITHMS ----
+ 
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+--We started out by disabling interrupts in timer_sleep() to prevent race conditions. 
+--We use a new linked list structure called sleeping to maintain a list of sleeping threads in order by each threads time to sleep. 
+--Then it calls thread_block() to block the sleeping thread so it won't be able to run until it's ready.
+--After a thread is added to the list of sleeping threads, interrupts are re-enabled. 
+--The interrupt handler calls timer_interrupt(), which, after our modification, loops through the list of sleeping threads to check if any are ready to be woken up. 
+--If so, the thread is unblocked and popped from the sleeping list.
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+--While iterating through the list of sleeping threads in timer_interrupt, we always start by checking the thread at the front of the list.
+--If that thread isn't ready to wake up, we leave the loop. Due to the ordering of our list, if the thread with the lowest sleep time isn't ready to wake up, 
+--then none of the other threads will be ready to wake up yet either.
+ 
+---- SYNCHRONIZATION ----
+ 
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+--By using thread_block() and thread_unblock() in timer_sleep() and timer_interrupt(), respectively, 
+--we allow the list of sleeping threads to be modified safely.
+ 
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+--We disable interrupts at the beginning of timer_sleep() so that sleeping thread list modification can happen safely.
+--Once a thread is added to the sleeping thread list, we re-enable interrupts.
+ 
+---- RATIONALE ----
+ 
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+--Our original design was to add a status field to the thread struct that states whether the thread is asleep.
+--Each thread would be scheduled regardless, but before loading the thread onto the CPU, the scheduler would
+--check the status of the thread. If it's asleep, it would be pushed to the back of the ready list.
+--This is inefficient because we'd still be scheduling sleeping threads and wasting resources.
+--Our actual design is superior because we are not scheduling any threads that are not ready to run.
+--Sleeping threads are maintained in a separate list, thus saving resources and time.

@@ -1,0 +1,165 @@
+            +----------------------------+
+       	    |          CS 450            |
+            |   PROJECT 3: SYSTEM CALLS  |
+            |      DESIGN DOCUMENT     	 |
+            +----------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+--Jacob Grimes  <grime3ja@dukes.jmu.edu>
+--Mackenzie Seek <seekmn@dukes.jmu.edu>
+--Joey Walker <walke3jk@dukes.jmu.edu>
+--Ian Zygmunt <zygmunia@dukes.jmu.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, please give 
+>> them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     SYSTEM CALLS
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In struct thread in thread.h:
+
+struct file *fd_table[128];  
+	Maintains all of the file descriptors per process.
+
+int exit_status;
+	Stores the exit status so that a parent waiting on this process knows it.
+
+struct list children;
+	Maintains a list of any children a process might have.
+
+struct thread *parent;
+	Points to the parent of a process.
+
+struct file *executable; 
+	A pointer to the file which a process is executing.
+
+struct lock child_lock;
+	Enforces synchronization between children to avoid race conditions.
+
+In process.c:
+	
+struct child_process;
+	Maintains the state of a child process, including but not limited to exit status and semaphores a parent process can wait on.
+
+In syscall.c:
+
+struct lock file_lock;
+	The synchronization mechanism for file system operations.
+
+
+>> A2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+File descriptors are unique per-process. Each process has its own file descriptor table that can hold file descriptors between 2 and 128. If one process opens a file, it will be assigned the next available file descriptor, starting at 2. If another process opens the same file, let's say it's the 3rd file that process opens, that file will be assigned a FD of 4. Both descriptors refer to the same underlying file, but according to each process, the descriptors are unique.
+
+
+---- ALGORITHMS ----
+
+>> A3: Describe your code for reading and writing user data from the
+>> kernel.
+
+In both cases, a global lock is used to ensure proper synchronization during file read and write operations. All arguments passed to read() and write() are validated before use to ensure robustness. If any value is invalid, the process terminates immediately.
+
+For valid file descriptors (2-128), the write operation acquires the file_lock, calls file_write() to write the user buffer's contents to the file, releases the lock, and sets the return value to the number of bytes successfully written.
+
+The read operation follows the same pattern: it acquires the file_lock, calls file_read() on the corresponding file in the current thread's file descriptor table, releases the lock, and returns the number of bytes successfully read.
+
+
+>> A4: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+The wait system call is implemented by retrieving the child process ID from the stack and passing it to process_wait(). Inside process_wait(), the parent process searches its list of child processes for a matching tid. If no match is found or the child has already been waited on, it immediately returns -1.
+
+If the child exists and hasn't terminated yet, the parent calls sema_down() on the child's wait_sema semaphore, blocking until the child is done. Once the child exits, its exit status is retrieved, the alr_waited flag is set to prevent multiple waits, and the child's resources are freed and removed from the list.
+
+This ensures proper synchronization between parent and child processes and guarantees that a parent can only wait once for each child, receiving the correct exit status after the child's termination.
+
+
+>> A5: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+We avoid situations where we are we are obscuring the primary reason of the system call by before getting into the main portion of the system call, testing the pointer values beforehand, and if it is a bad pointer we call 'exit (-1)' which is a function we wrote that simulates the SYS_EXIT call. We do this before we start the main portion of the system call so that if something should not be used because it is a bad pointer, then we do not even try to recover and we just fail nicely with an exit status of -1. 
+
+We make sure that resources are freed by calling 'thread_exit ()' in the 'exit ()' function, which when run in the userprog directory calls 'process_exit ()', which will free all of the currently running process's resources.
+
+For example, let's say we make a call similar to the one made in the bad-jump test (tests/userprog/bad-jump.c). At the beginning of the test, it sets a functionptr type (a function pointer typedef) to NULL. It then tries to call that functionptr variable, which will invoke the SYS_EXEC call. Our 'syscall_handler ()' will make sure that f->esp is a valid address, which it is because that is the enum value for SYS_EXEC. Then it will enter into the SYS_EXEC portion of our handler. It will then call 'test_address ()' on f->esp + 1 (which is the NULL functionptr), and 'test_address ()' will check to see if that is a valid address, which it isn't because a function address cannot be NULL, so the 'test_address ()' will call our 'exit ()' function with a status of -1 which will kill the thread and currently running process.
+
+However, if we were to use a valid exec call using a binary that actually exists, it will make it through our 'test_address ()' function, and then call 'process_execute ()' and will run to completion, returning the exit status with f->eax.
+
+
+---- SYNCHRONIZATION ----
+
+>> A6: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+The exec system call ensures that it does not return until the new executable has finished loading by using a semaphore for synchronization between the parent and child processes. When process_execute() creates the child thread with thread_create(), it initializes a semaphore (load_sema) in the child's struct child_process. The parent then immediately calls sema_down on the load_sema semaphore, blocking until the child signals that loading has completed.
+
+During the child's startup (inside start_process()), once the load attempt finishes, it signals the parent by calling sema_up on the load_sema semaphore. The child sets the load_success flag to true if the executable is loaded correctly, or false otherwise.
+
+When the parent unblocks, it checks this load_success flag. If loading fails, process_execute() returns -1. Otherwise, it returns the child's tid. This ensures that exec waits for the load result and that the parent receives accurate success or failure status before continuing.
+
+
+>> A7: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+When P calls wait(C) before C exits, P blocks on the child's wait_sema semaphore. When C does exit, it sets exited to true, stores its exit status, and calls sema_up on the wait_sema semaphore to unblock P. Then, P can get the status of the child, mark the child as waited, remove it from its list of children, and free the child.
+
+When P calls wait(C) after C exits, the child already set its exited flag to true, so P isn't blocked. It can immediately read the child's exit_status and free the child.
+
+When P terminates before C exits, P frees any child processes remaining in its list of children. 
+
+When P terminates after C exits, C has already set its exited flag to true, and P frees any remaining children.
+
+Special cases:
+If C fails to load for any reason, it sets its load_success flag to false, signaling the load_sema semaphore so that P doesn't hang.
+
+Waiting twice on the same child returns -1.
+
+
+---- RATIONALE ----
+
+>> A8: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+We chose to implement access to user memory by first verifying that the pointer passed into the system call is a valid user address and has an entry on the PintOS page directory (inside of 'test_address ()'), then dereferencing that memory address into the arguments for the given system call. We did this because before we started writing our implementation, that made the most logical sense for us as we just needed to verify the address passed in was less than PHYS_BASE ('is_user_vaddr ()'), and make sure that it has been mapped on the page directory (functions from userprog/pagedir.c and threads/vaddr.h). Further we ensure that the whole buffer doesn't leak into kernel memory or unmapped regions with the call to 'test_address_range ()' which moves through the buffer in 4KB steps.
+
+
+>> A9: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+Advantages: The underlying data structure is very simple and straightforward. It's a fixed size, so we don't have to worry about dynamic allocations. Lookups happen in constant time since the underlying data structure is just an array. Additionally, each process maintains their own file descriptor table, which enforces isolation between processes.
+
+Disadvantages: Each process can only open up to 128 files. From a PintOS perspective, this is fine, but in a practical OS, this might be a harsh limit. Also, this implementation doesn't keep track of references, which means the kernel has no idea how many processes are still using a file at a given time. This is a problem because we might inadvertently close a file or re-enable write permissions to an executable too early. While these issues aren't much of a concern for PintOS, for an actual OS, these would be very important considerations.

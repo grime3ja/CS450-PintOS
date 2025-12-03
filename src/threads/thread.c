@@ -24,6 +24,8 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+static struct list priority_queue[63];
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -71,6 +73,8 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+// bool comp_func_pri(const struct list_elem *, const struct list_elem *, void * UNUSED);
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,6 +96,8 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  for (int i = 0; i < 63; i++)
+    list_init (&priority_queue[i]);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -183,6 +189,9 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Make current thread the parent of the child */
+  t->parent = thread_current();
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -200,6 +209,9 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+
+  /* Initialize the FD table. */
+  memset(t->fd_table, 0, sizeof t->fd_table);
 
   return tid;
 }
@@ -446,6 +458,13 @@ is_thread (struct thread *t)
   return t != NULL && t->magic == THREAD_MAGIC;
 }
 
+// bool comp_func_pri(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+//   struct thread *a_ptr = list_entry(a, struct thread, elem);
+//   struct thread *b_ptr = list_entry(b, struct thread, elem);
+
+//   return a_ptr->priority < b_ptr->priority;
+// }
+
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
@@ -466,7 +485,16 @@ init_thread (struct thread *t, const char *name, int priority)
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
+  
+  // push to the back of the priority queue at the given priority, still need to pull
+  // it when the thread starts or is switched to (not sure how to do that though)
+  list_push_back (&priority_queue[priority], &t->allelem);
   intr_set_level (old_level);
+
+  list_init(&t->children);
+  t->parent = NULL;
+  t->exit_status = 0;
+  lock_init(&t->child_lock);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

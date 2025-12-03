@@ -1,0 +1,64 @@
+            +----------------------------+
+            |          CS 450            |
+            | PROJECT 2: USER PROGRAMS I |
+            |      DESIGN DOCUMENT       |
+            +----------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+--Jacob Grimes  <grime3ja@dukes.jmu.edu>
+--Mackenzie Seek <seekmn@dukes.jmu.edu>
+--Joey Walker <walke3jk@dukes.jmu.edu>
+--Ian Zygmunt <zygmunia@dukes.jmu.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, please give 
+>> them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+We used course text, lecture notes, and Pintos documentation.
+
+
+                          ARGUMENT PASSING
+
+                          ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+We created a global semaphore variable that is used in process.c to prevent multiple processes trying to start and execute a command at the same time.
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+We avoided overflow by using the realloc function when loading argv from the buffer. In load(), the arguments were loaded in the order they 
+appear, and in setup_stack the arguments are looped through backwards and placed into the stack pointer (esp). The stack is then loaded with 
+the addresses of the argvarray, followed with the address of argv itself, and finally a "return address" (which is set to 0 according to the 
+project specification.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+strtok_r() is a thread-safe and reentrant function, whereas strtok() is neither. strtok_r() uses a save pointer instead of a static variable 
+to keep track of the string we're tokenizing, that way multiple threads can safely access the same string without risking race conditions.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+1. By delegating to the shell, the kernel can focus on more pertinent tasks like process scheduling.
+2. It also simplifies security. When a shell executes a command, the executable inherits the privileges of the shell process. 
+   Pushing this responsibility to the shell avoids improper privilege escalation by a malicious program.

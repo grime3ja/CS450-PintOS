@@ -26,10 +26,6 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-// struct semaphore sema;
-bool initialized = false;
-
-/* Keeps track of the state of each child process. */
 struct child_process {
   tid_t tid;
   int exit_status;
@@ -41,6 +37,9 @@ struct child_process {
   struct list_elem elem;
 };
 
+struct semaphore sema;
+bool initialized = false;
+
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -48,15 +47,12 @@ struct child_process {
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
-  char *thread_name_copy;
-  tid_t tid;
-  struct thread *curr = thread_current();
-
   if (!initialized) {
-    // sema_init (&sema, 0);
+    sema_init (&sema, 0);
     initialized = true;
   }
+  char *fn_copy;
+  tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -65,54 +61,12 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  thread_name_copy = palloc_get_page (0);
-  if (!thread_name_copy) {
-    palloc_free_page(fn_copy);
-    return TID_ERROR;
-  }
-  strlcpy(thread_name_copy, file_name, PGSIZE);
+  /* Create a new thread to execute FILE_NAME. */
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
 
-  char *ptr;
-  char *program_name = strtok_r(thread_name_copy, " ", &ptr);
-
-  struct child_process *c_ptr = malloc(sizeof *c_ptr);
-  if (!c_ptr) {
-    palloc_free_page(fn_copy);
-    palloc_free_page(thread_name_copy);
-    return TID_ERROR;
-  }
-
-  // initialize the child process
-  c_ptr->tid = TID_ERROR;
-  c_ptr->exited = false;
-  c_ptr->alr_waited = false;
-  c_ptr->load_success = false;
-  sema_init(&c_ptr->load_sema, 0);
-  sema_init(&c_ptr->wait_sema, 0);
-
-  lock_acquire(&curr->child_lock);
-  list_push_back(&curr->children, &c_ptr->elem);
-  lock_release(&curr->child_lock);
-
-  /* Create a new thread to execute program_name. */
-  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
-  palloc_free_page(thread_name_copy);
-
-  if (tid == TID_ERROR) {
-    list_remove(&c_ptr->elem);
-    free(c_ptr);
+  sema_down (&sema);
+  if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-    return TID_ERROR;
-  }
-
-  c_ptr->tid = tid;
-
-  // wait for the child to load
-  sema_down(&c_ptr->load_sema);
-  if (!c_ptr->load_success) {
-    return -1;
-  }
-
   return tid;
 }
 
@@ -130,31 +84,11 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-
   success = load (file_name, &if_.eip, &if_.esp);
-
-  struct thread *curr = thread_current();
-  struct thread *parent = curr->parent;
-
-  // tell the parent about load success/failure
-  if (parent) {
-    lock_acquire(&parent->child_lock);
-    for (struct list_elem *e = list_begin(&parent->children);
-    e != list_end(&parent->children);
-    e = list_next(e)) {
-      struct child_process *c_ptr = list_entry(e, struct child_process, elem);
-      if (c_ptr->tid == curr->tid) {
-        c_ptr->load_success = success;
-        sema_up(&c_ptr->load_sema); // let the parent know
-        break;
-      }
-    }
-    lock_release(&parent->child_lock);
-  }
   
   /* If load failed, quit. */
   palloc_free_page (file_name);
-
+  sema_up (&sema);
   if (!success) 
     thread_exit ();
 
@@ -178,51 +112,10 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid) 
+process_wait (tid_t child_tid UNUSED) 
 {
   // while (1);
-  struct thread *curr = thread_current();
-  struct child_process *c_ptr = NULL;
-
-  lock_acquire(&curr->child_lock);
-  for (struct list_elem *e = list_begin(&curr->children);
-       e != list_end(&curr->children);
-       e = list_next(e)) {
-
-    struct child_process *child = list_entry(e, struct child_process, elem);
-    if (child->tid == child_tid) {
-      c_ptr = child;
-      break;
-    }
-  }
-  lock_release(&curr->child_lock);
-
-  // not a child, return
-  if (!c_ptr) {
-    return -1;
-  }
-
-  // already waited
-  if (c_ptr->alr_waited) {
-    return -1;
-  }
-
-  // parent waits for child to finish if hasn't exited yet
-  if (!c_ptr->exited) {
-    sema_down(&c_ptr->wait_sema);
-  }
-
-  c_ptr->alr_waited = true;
-
-  int status = c_ptr->exit_status;
-
-  // clean up and remove the child
-  lock_acquire(&curr->child_lock);
-  list_remove(&c_ptr->elem);
-  lock_release(&curr->child_lock);
-  free(c_ptr);
-
-  return status;
+  return 0;
 }
 
 /* Free the current process's resources. */
@@ -231,48 +124,6 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
-
-  // printf("%s: exit(%d)\n", cur->name, cur->exit_status);
-
-  struct thread *parent = cur->parent;
-  if (parent) {
-    lock_acquire(&parent->child_lock);
-    for (struct list_elem *e = list_begin(&parent->children);
-         e != list_end(&parent->children);
-         e = list_next(e)) {
-      struct child_process *c_ptr = list_entry(e, struct child_process, elem);
-      if (c_ptr->tid == cur->tid) {
-        c_ptr->exit_status = cur->exit_status;
-        c_ptr->exited = true;
-        sema_up(&c_ptr->wait_sema);
-        break;
-      }
-    }
-    lock_release(&parent->child_lock);
-  }
-
-  // allow writing to the executable file
-  if (cur->executable != NULL) {
-    file_allow_write(cur->executable);
-    file_close(cur->executable);
-    cur->executable = NULL;
-  }
-
-  // close any open files
-  for (int fd = 2; fd < 128; fd++) {
-    if (cur->fd_table[fd]) {
-      file_close(cur->fd_table[fd]);
-      cur->fd_table[fd] = NULL;
-    }
-  }
-
-  // clean up after each child
-  struct list_elem *e;
-  while (!list_empty(&cur->children)) {
-    e = list_pop_front(&cur->children);
-    struct child_process *c_ptr = list_entry(e, struct child_process, elem);
-    free(c_ptr);
-  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -307,7 +158,8 @@ process_activate (void)
      interrupts. */
   tss_update ();
 }
-
+
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -519,19 +371,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  // file_close (file);
-  // return success;
-  if (success) {
-    t->executable = file;
-    file_deny_write(file);
-  } else {
-    // close file since load failed
-    if (file != NULL)
-      file_close(file);
-  }
+  file_close (file);
   return success;
 }
-
+
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -655,7 +499,7 @@ setup_stack (void **esp, char **argv, int argc)
       if (success) {
         *esp = PHYS_BASE;
 
-        unsigned int addresses[argc];
+        unsigned int addresses[argc + 1];
         // store argv in the stack, keep track of addresses for argv
         for (int i = argc - 1; i >= 0; i--) {
           *esp -= (unsigned int) (strlen (argv[i])) + 1;
